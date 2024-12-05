@@ -142,7 +142,31 @@ def map_nominal(genotype_df, variant_df, phenotype_df, phenotype_pos_df, prefix,
     write_top is set to False, in which case it is returned as a DataFrame
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    # Filter out variants that have colliniearity in the interaction terms, covariates, or phenotype data
+    def filter_variants_safely(genotypes_t, interaction_t):
+        """
+        Safely filter variants that might cause singular matrix errors
+        """
+        # Track successful variants
+        valid_variants_mask = torch.ones(genotypes_t.shape[0], dtype=torch.bool)
+        
+        for i in range(genotypes_t.shape[0]):
+            try:
+                # Try to calculate interaction for each variant
+                single_variant = genotypes_t[i:i+1]
+                _ = calculate_interaction_nominal(
+                    single_variant, 
+                    phenotype_t.unsqueeze(0), 
+                    interaction_t,
+                    return_sparse=False
+                )
+            except Exception as e:
+                # Mark this variant as invalid
+                valid_variants_mask[i] = False
+                # logger.write(f'Skipping variant due to singular matrix: {e}')
+        
+        # Filter genotypes based on valid variants
+        return genotypes_t[valid_variants_mask], valid_variants_mask
     if logger is None:
         logger = SimpleLogger()
     if group_s is not None:
@@ -252,16 +276,31 @@ def map_nominal(genotype_df, variant_df, phenotype_df, phenotype_pos_df, prefix,
         start = 0
         if group_s is None:
             for k, (phenotype, genotypes, genotype_range, phenotype_id) in enumerate(igc.generate_data(chrom=chrom, verbose=verbose), k+1):
+                
                 # copy genotypes to GPU
                 phenotype_t = torch.tensor(phenotype, dtype=torch.float).to(device)
                 genotypes_t = torch.tensor(genotypes, dtype=torch.float).to(device)
                 genotypes_t = genotypes_t[:,genotype_ix_t]
                 impute_mean(genotypes_t)
-
+                
                 variant_ids = variant_df.index[genotype_range[0]:genotype_range[-1]+1]
                 start_distance = np.int32(variant_df['pos'].values[genotype_range[0]:genotype_range[-1]+1] - igc.phenotype_start[phenotype_id])
                 if 'pos' not in phenotype_pos_df:
                     end_distance = np.int32(variant_df['pos'].values[genotype_range[0]:genotype_range[-1]+1] - igc.phenotype_end[phenotype_id])
+
+                genotypes_t, valid_mask = filter_variants_safely(genotypes_t, interaction_t)
+                
+                variant_ids = variant_df.index[genotype_range[0]:genotype_range[-1]+1]
+                logger.write(f'variant_ids:{str(len(variant_ids))}')
+                valid_mask = valid_mask.cpu().numpy().astype(bool)
+                variant_ids = variant_ids[valid_mask]
+                start_distance = start_distance[valid_mask]
+                if 'pos' not in phenotype_pos_df:
+                        end_distance = end_distance[valid_mask]
+                logger.write(f'genotype_range: {str(len(genotype_range))}')
+                logger.write(f'valid_mask:{str(len(valid_mask))}')
+                logger.write(f'genotypes_t:{str(len(genotypes_t))}')
+
 
                 if maf_threshold > 0:
                     maf_t = calculate_maf(genotypes_t)
