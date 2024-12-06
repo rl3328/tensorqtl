@@ -216,18 +216,54 @@ def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, resi
         for k in range(i0_t.shape[1]):
             gi0_t[..., k] = residualizer.transform(gi0_t[..., k], center=False)
     i0_t = i0_t.repeat(ng, 1, 1)
-
+    
     # regression (in float; loss of precision may occur in edge cases)
     X_t = torch.cat([g0_t.unsqueeze(-1), i0_t, gi0_t], 2)  # ng x ns x (1+2*ni)
+    # Filter out variants that have colliniearity in the interaction terms, covariates, or phenotype data
+    p0_tile_t = p0_t.unsqueeze(0).expand([ng, *p0_t.shape])  # ng x np x ns
+
+    # Create valid variant mask before filtering
+    valid_mask = torch.ones(X_t.shape[0], dtype=torch.bool, device=X_t.device)
+    
+    invalid_variants = []
+    for i in range(ng):
+        try:
+            X_variant = X_t[i]
+            torch.matmul(torch.transpose(X_variant, 0, 1), X_variant).inverse()
+        except Exception as e:
+            invalid_variants.append(i)
+            valid_mask[i] = False
+    
+    # Log filtering information
+    total_variants = ng
+    filtered_out_count = len(invalid_variants)
+    kept_variants_count = total_variants - filtered_out_count
+    
+    print(f"Total variants: {total_variants}")
+    print(f"Variants filtered out due to singular matrix: {filtered_out_count}")
+    print(f"Variants kept: {kept_variants_count}")
+    # print(f"Filtered variant indices: {invalid_variants}")
+    
+    
+    # Filter tensors if invalid variants exist
+    if invalid_variants:
+        X_t = X_t[valid_mask]
+        g0_t = g0_t[valid_mask]
+        p0_tile_t = p0_tile_t[valid_mask]
+        variant_ids = variant_ids[valid_mask.cpu().numpy()]
+        genotypes_t = genotypes_t[valid_mask]
+        # Update ng (number of genotypes)
+        ng = X_t.shape[0]
+
     try:
         Xinv = torch.matmul(torch.transpose(X_t, 1, 2), X_t).inverse() # ng x (1+2*ni) x (1+2*ni)
     except Exception as e:
         if variant_ids is not None and len(e.args) >= 1:
             i = int(re.findall(r'For batch (\d+)', str(e))[0])
             e.args = (e.args[0] + f'\n    Likely problematic variant: {variant_ids[i]} ',) + e.args[1:]
-        raise
+        raise 
 
-    p0_tile_t = p0_t.unsqueeze(0).expand([ng, *p0_t.shape])  # ng x np x ns
+    
 
     # calculate b, b_se
     # [(ng x nb x nb) x (ng x nb x ns)] x (ng x ns x np) = (ng x nb x np)
@@ -261,7 +297,7 @@ def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, resi
         # calculate pval
         # pval_t = tf.scalar_mul(2, tdist.cdf(-tf.abs(tstat_t)))  # (ng x 3 x np)
         af_t, ma_samples_t, ma_count_t = get_allele_stats(genotypes_t)
-        return tstat_t, b_t, b_se_t, af_t, ma_samples_t, ma_count_t
+        return (tstat_t, b_t, b_se_t, af_t, ma_samples_t, ma_count_t), valid_mask
 
     else:  # sparse output
         if ni > 1:
@@ -275,7 +311,7 @@ def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, resi
         tstat_i_t = tstat_i_t[m]
         tstat_gi_t = tstat_gi_t[m]
         ix = m.nonzero(as_tuple=False)  # indexes: [genotype, phenotype]
-        return tstat_g_t, tstat_i_t, tstat_gi_t, af_t[ix[:,0]], ix
+        return (tstat_g_t, tstat_i_t, tstat_gi_t, af_t[ix[:,0]], ix), valid_mask
 
 
 

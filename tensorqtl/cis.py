@@ -142,31 +142,7 @@ def map_nominal(genotype_df, variant_df, phenotype_df, phenotype_pos_df, prefix,
     write_top is set to False, in which case it is returned as a DataFrame
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # Filter out variants that have colliniearity in the interaction terms, covariates, or phenotype data
-    def filter_variants_safely(genotypes_t, interaction_t):
-        """
-        Safely filter variants that might cause singular matrix errors
-        """
-        # Track successful variants
-        valid_variants_mask = torch.ones(genotypes_t.shape[0], dtype=torch.bool)
         
-        for i in range(genotypes_t.shape[0]):
-            try:
-                # Try to calculate interaction for each variant
-                single_variant = genotypes_t[i:i+1]
-                _ = calculate_interaction_nominal(
-                    single_variant, 
-                    phenotype_t.unsqueeze(0), 
-                    interaction_t,
-                    return_sparse=False
-                )
-            except Exception as e:
-                # Mark this variant as invalid
-                valid_variants_mask[i] = False
-                # logger.write(f'Skipping variant due to singular matrix: {e}')
-        
-        # Filter genotypes based on valid variants
-        return genotypes_t[valid_variants_mask], valid_variants_mask
     if logger is None:
         logger = SimpleLogger()
     if group_s is not None:
@@ -288,19 +264,6 @@ def map_nominal(genotype_df, variant_df, phenotype_df, phenotype_pos_df, prefix,
                 if 'pos' not in phenotype_pos_df:
                     end_distance = np.int32(variant_df['pos'].values[genotype_range[0]:genotype_range[-1]+1] - igc.phenotype_end[phenotype_id])
 
-                genotypes_t, valid_mask = filter_variants_safely(genotypes_t, interaction_t)
-                
-                variant_ids = variant_df.index[genotype_range[0]:genotype_range[-1]+1]
-                logger.write(f'variant_ids:{str(len(variant_ids))}')
-                valid_mask = valid_mask.cpu().numpy().astype(bool)
-                variant_ids = variant_ids[valid_mask]
-                start_distance = start_distance[valid_mask]
-                if 'pos' not in phenotype_pos_df:
-                        end_distance = end_distance[valid_mask]
-                logger.write(f'genotype_range: {str(len(genotype_range))}')
-                logger.write(f'valid_mask:{str(len(valid_mask))}')
-                logger.write(f'genotypes_t:{str(len(genotypes_t))}')
-
 
                 if maf_threshold > 0:
                     maf_t = calculate_maf(genotypes_t)
@@ -328,10 +291,13 @@ def map_nominal(genotype_df, variant_df, phenotype_df, phenotype_pos_df, prefix,
                     if genotypes_t.shape[0] > 0:
                         mask = mask_t.cpu().numpy()
                         variant_ids = variant_ids[mask]
-                        res = calculate_interaction_nominal(genotypes_t, phenotype_t.unsqueeze(0), interaction_t,
-                                                            residualizer=iresidualizer, return_sparse=False,
-                                                            variant_ids=variant_ids)
+                        start_distance = start_distance[mask]
+                        if 'pos' not in phenotype_pos_df:
+                            end_distance = end_distance[mask]
+                        res, int_mask = calculate_interaction_nominal(genotypes_t, phenotype_t.unsqueeze(0), interaction_t, residualizer=iresidualizer, return_sparse=False, variant_ids=variant_ids)
                         tstat, b, b_se, af, ma_samples, ma_count = [i.cpu().numpy() for i in res]
+                        mask = int_mask.cpu().numpy()
+                        variant_ids = variant_ids[mask]
                         start_distance = start_distance[mask]
                         if 'pos' not in phenotype_pos_df:
                             end_distance = end_distance[mask]
@@ -430,10 +396,16 @@ def map_nominal(genotype_df, variant_df, phenotype_df, phenotype_pos_df, prefix,
                         res = calculate_cis_nominal(genotypes_t, phenotype_t, residualizer=iresidualizer)
                         tstat, slope, slope_se, af, ma_samples, ma_count = [i.cpu().numpy() for i in res]
                     else:
-                        res = calculate_interaction_nominal(genotypes_t, phenotype_t.unsqueeze(0), interaction_t,
+                        res, int_mask = calculate_interaction_nominal(genotypes_t, phenotype_t.unsqueeze(0), interaction_t,
                                                             residualizer=iresidualizer, return_sparse=False,
                                                             variant_ids=variant_ids)
                         tstat, b, b_se, af, ma_samples, ma_count = [i.cpu().numpy() for i in res]
+                        mask = int_mask.cpu().numpy()
+                        variant_ids = variant_ids[mask]
+                        start_distance = start_distance[mask]
+                        if 'pos' not in phenotype_pos_df:
+                            end_distance = end_distance[mask]
+                        n = len(variant_ids)
                     px = [phenotype_id]*n
 
                     # iterate over remaining phenotypes in group
@@ -443,10 +415,16 @@ def map_nominal(genotype_df, variant_df, phenotype_df, phenotype_pos_df, prefix,
                             res = calculate_cis_nominal(genotypes_t, phenotype_t, residualizer=iresidualizer)
                             tstat0, slope0, slope_se0, af, ma_samples, ma_count = [i.cpu().numpy() for i in res]
                         else:
-                            res = calculate_interaction_nominal(genotypes_t, phenotype_t.unsqueeze(0), interaction_t,
+                            res, int_mask = calculate_interaction_nominal(genotypes_t, phenotype_t.unsqueeze(0), interaction_t,
                                                                 residualizer=iresidualizer, return_sparse=False,
                                                                 variant_ids=variant_ids)
                             tstat0, b0, b_se0, af, ma_samples, ma_count = [i.cpu().numpy() for i in res]
+                            mask = int_mask.cpu().numpy()
+                            variant_ids = variant_ids[mask]
+                            start_distance = start_distance[mask]
+                            if 'pos' not in phenotype_pos_df:
+                                end_distance = end_distance[mask]
+                            n = len(variant_ids)
 
                         # find associations that are stronger for current phenotype
                         if interaction_df is None:
