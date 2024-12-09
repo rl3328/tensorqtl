@@ -178,8 +178,9 @@ def get_t_pval(t, df, log=False):
             raise ValueError("R and rpy2 are required to compute -log10(P)")
 
 
-def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, residualizer=None,
-                                  return_sparse=False, tstat_threshold=None, variant_ids=None):
+def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, variant_ids, 
+                                  start_distance=None, end_distance=None, residualizer=None,
+                                  return_sparse=False, tstat_threshold=None):
     """
     Solve y ~ g + i + g:i, where i is an interaction vector or matrix
 
@@ -291,13 +292,18 @@ def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, resi
         # b_se_t = tf.sqrt(tf.tile(tf.expand_dims(tf.matrix_diag_part(Xinv), 2), [1,1,nps]) * tf.tile(tf.expand_dims(rss_t, 1), [1,3,1]) / dof) # (ng x 3) -> (ng x 3 x np)
 
     tstat_t = (b_t.double() / b_se_t.double()).float()  # (ng x nb x np)
-
+    
+    filtered_variant_ids = variant_ids[valid_mask]
+    filtered_start_distance = start_distance[valid_mask] if start_distance is not None else None
+    filtered_end_distance = end_distance[valid_mask] if end_distance is not None else None
+    n = len(filtered_variant_ids)
+    
     # tdist = tfp.distributions.StudentT(np.float64(dof), loc=np.float64(0.0), scale=np.float64(1.0))
     if not return_sparse:
         # calculate pval
         # pval_t = tf.scalar_mul(2, tdist.cdf(-tf.abs(tstat_t)))  # (ng x 3 x np)
         af_t, ma_samples_t, ma_count_t = get_allele_stats(genotypes_t)
-        return (tstat_t, b_t, b_se_t, af_t, ma_samples_t, ma_count_t), valid_mask
+        return (tstat_t, b_t, b_se_t, af_t, ma_samples_t, ma_count_t), filtered_variant_ids, filtered_start_distance, filtered_end_distance, n
 
     else:  # sparse output
         if ni > 1:
@@ -311,7 +317,7 @@ def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, resi
         tstat_i_t = tstat_i_t[m]
         tstat_gi_t = tstat_gi_t[m]
         ix = m.nonzero(as_tuple=False)  # indexes: [genotype, phenotype]
-        return (tstat_g_t, tstat_i_t, tstat_gi_t, af_t[ix[:,0]], ix), valid_mask
+        return tstat_g_t, tstat_i_t, tstat_gi_t, af_t[ix[:,0]], ix
 
 
 
