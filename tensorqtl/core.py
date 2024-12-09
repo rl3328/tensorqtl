@@ -251,7 +251,6 @@ def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, vari
         X_t = X_t[valid_mask]
         g0_t = g0_t[valid_mask]
         p0_tile_t = p0_tile_t[valid_mask]
-        variant_ids = variant_ids[valid_mask.cpu().numpy()]
         genotypes_t = genotypes_t[valid_mask]
         # Update ng (number of genotypes)
         ng = X_t.shape[0]
@@ -292,7 +291,8 @@ def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, vari
         # b_se_t = tf.sqrt(tf.tile(tf.expand_dims(tf.matrix_diag_part(Xinv), 2), [1,1,nps]) * tf.tile(tf.expand_dims(rss_t, 1), [1,3,1]) / dof) # (ng x 3) -> (ng x 3 x np)
 
     tstat_t = (b_t.double() / b_se_t.double()).float()  # (ng x nb x np)
-    
+
+    valid_mask = valid_mask.cpu().numpy()
     filtered_variant_ids = variant_ids[valid_mask]
     filtered_start_distance = start_distance[valid_mask] if start_distance is not None else None
     filtered_end_distance = end_distance[valid_mask] if end_distance is not None else None
