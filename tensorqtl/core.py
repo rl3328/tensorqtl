@@ -219,6 +219,16 @@ def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, resi
 
     # regression (in float; loss of precision may occur in edge cases)
     X_t = torch.cat([g0_t.unsqueeze(-1), i0_t, gi0_t], 2)  # ng x ns x (1+2*ni)
+    for i in range(ng):
+        try:
+            X_variant = X_t[i]
+            torch.matmul(torch.transpose(X_variant, 0, 1), X_variant).inverse()
+        except Exception as e:
+            # set parameters as NA
+            X_t[i] = float('nan')
+            g0_t[i] = float('nan')
+            #genotypes_t[i] = float('nan')
+
     try:
         Xinv = torch.matmul(torch.transpose(X_t, 1, 2), X_t).inverse() # ng x (1+2*ni) x (1+2*ni)
     except Exception as e:
